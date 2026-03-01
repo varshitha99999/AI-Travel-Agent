@@ -1,63 +1,95 @@
-import json
 import os
-from typing import Any, Dict
+from dotenv import load_dotenv
+from langchain_groq import ChatGroq
+from langchain_core.messages import HumanMessage, SystemMessage
 
-import groq
-from groq import AsyncGroq
+from agent.budget import calculate_budget
+from services.weather import get_weather
+from services.hotels import search_hotels
 
-from agent.prompts import build_system_prompt, build_user_prompt
-from models.request_model import TripPlan, TripRequest
-
-
-class PlannerError(Exception):
-    pass
+load_dotenv()
 
 
 class TripPlanner:
-    def __init__(self) -> None:
-        api_key = os.getenv("GROQ_API_KEY") or os.getenv("OPENAI_API_KEY")
-        if not api_key:
-            raise PlannerError("GROQ_API_KEY is not set")
-        self.client = AsyncGroq(api_key=api_key)
-        self.model = os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile")
+    def __init__(self):
+        self.llm = ChatGroq(
+            groq_api_key=os.getenv("GROQ_API_KEY"),
+            model_name="llama-3.3-70b-versatile",
+            temperature=0.7,
+        )
+        self.conversation_history = []
 
-    async def plan_trip(self, request: TripRequest) -> TripPlan:
-        system_prompt = build_system_prompt()
-        user_prompt = build_user_prompt(request)
-        raw_content = await self._call_groq(system_prompt, user_prompt)
-        data = self._parse_response(raw_content)
-        return TripPlan(**data)
-
-    async def _call_groq(self, system_prompt: str, user_prompt: str) -> str:
+    def chat(self, user_input: str) -> str:
         try:
-            completion = await self.client.chat.completions.create(
-                model=self.model,
-                messages=[
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": user_prompt},
-                ],
-                temperature=0.7,
-            )
-            content = completion.choices[0].message.content
-            if not content:
-                raise PlannerError("Empty response from Groq")
-            return content
-        except groq.APIError as exc:
-            raise PlannerError(f"Error calling Groq API: {exc}") from exc
-        except Exception as exc:
-            raise PlannerError(f"Unexpected error calling Groq API: {exc}") from exc
+            # Add user message to history
+            self.conversation_history.append(f"User: {user_input}")
+            
+            # Check if user wants specific tools
+            response = self._process_with_tools(user_input)
+            
+            # Add AI response to history
+            self.conversation_history.append(f"AI: {response}")
+            
+            return response
+        except Exception as e:
+            return f"Error: {str(e)}"
 
-    def _parse_response(self, content: str) -> Dict[str, Any]:
-        try:
-            data = json.loads(content)
-        except json.JSONDecodeError as exc:
-            raise PlannerError("Model response was not valid JSON") from exc
+    def _process_with_tools(self, user_input: str) -> str:
+        user_lower = user_input.lower()
+        
+        # Check for budget calculation
+        if "budget" in user_lower and "," in user_input:
+            # Extract budget parameters
+            parts = [p.strip() for p in user_input.split() if "," in p]
+            if parts:
+                budget_result = calculate_budget(parts[0])
+                return f"Budget calculation: {budget_result}"
+        
+        # Check for weather request
+        if "weather" in user_lower:
+            # Extract destination
+            words = user_input.split()
+            for i, word in enumerate(words):
+                if word.lower() in ["in", "for", "at"] and i + 1 < len(words):
+                    destination = words[i + 1].replace("?", "").replace(".", "")
+                    weather_result = get_weather(destination)
+                    return f"Weather info: {weather_result}"
+        
+        # Check for hotel request
+        if any(word in user_lower for word in ["hotel", "stay", "accommodation"]):
+            # Extract destination
+            words = user_input.split()
+            for i, word in enumerate(words):
+                if word.lower() in ["in", "for", "at"] and i + 1 < len(words):
+                    destination = words[i + 1].replace("?", "").replace(".", "")
+                    hotel_result = search_hotels(destination)
+                    return f"Hotel suggestions: {hotel_result}"
+        
+        # For general travel planning, use LLM
+        return self._get_llm_response(user_input)
 
-        required_keys = {"destination", "total_estimated_budget", "day_wise_plan", "travel_tips"}
-        if not required_keys.issubset(data.keys()):
-            raise PlannerError("Model response missing required fields")
+    def _get_llm_response(self, user_input: str) -> str:
+        system_prompt = """You are an AI Travel Concierge for Indian travelers.
 
-        if not isinstance(data["day_wise_plan"], list):
-            raise PlannerError("day_wise_plan must be a list")
+You help with:
+- Trip planning and itineraries
+- Travel advice and tips
+- Destination recommendations
+- Budget planning guidance
 
-        return data
+Be helpful, practical, and assume all costs are in INR unless specified otherwise.
+Keep responses concise and actionable."""
+
+        # Include recent conversation history for context
+        context = ""
+        if self.conversation_history:
+            recent_history = self.conversation_history[-4:]  # Last 2 exchanges
+            context = "\n".join(recent_history) + "\n"
+
+        messages = [
+            SystemMessage(content=system_prompt),
+            HumanMessage(content=f"{context}User: {user_input}")
+        ]
+
+        response = self.llm.invoke(messages)
+        return response.content

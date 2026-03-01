@@ -1,3 +1,2 @@
-class WeatherService:
-    def get_forecast(self, location, dates):
-        return {"location": location, "dates": dates, "forecast": []}
+def get_weather(destination: str) -> str:
+    return f"The weather in {destination} is expected to be warm and pleasant."

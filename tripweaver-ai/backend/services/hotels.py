@@ -1,3 +1,2 @@
-class HotelService:
-    def search(self, location, dates, guests):
-        return {"location": location, "dates": dates, "guests": guests, "results": []}
+def search_hotels(destination: str) -> str:
+    return f"Budget hotels in {destination}: Hotel Sunshine, Comfort Stay, Green Residency."
