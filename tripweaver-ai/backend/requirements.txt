@@ -1,4 +1,5 @@
-fastapi
-uvicorn[standard]
-groq
+langchain
+langchain-groq
+chainlit
+python-dotenv
 pydantic
