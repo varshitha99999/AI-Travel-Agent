@@ -1,7 +1,9 @@
 import os
 from dotenv import load_dotenv
 from langchain_groq import ChatGroq
-from langchain_core.messages import HumanMessage, SystemMessage
+from langchain_core.messages import HumanMessage, SystemMessage, AIMessage
+from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
+from langchain_core.output_parsers import StrOutputParser
 
 from agent.budget import calculate_budget
 from services.weather import get_weather
@@ -12,84 +14,134 @@ load_dotenv()
 
 class TripPlanner:
     def __init__(self):
+        # Initialize LangChain ChatGroq with proper configuration
         self.llm = ChatGroq(
             groq_api_key=os.getenv("GROQ_API_KEY"),
             model_name="llama-3.3-70b-versatile",
             temperature=0.7,
+            max_tokens=1000,
+            timeout=30,
         )
+        
+        # LangChain output parser
+        self.output_parser = StrOutputParser()
+        
+        # Conversation memory using LangChain message format
         self.conversation_history = []
+        
+        # Create LangChain prompt template
+        self.prompt_template = ChatPromptTemplate.from_messages([
+            ("system", """You are an AI Travel Concierge for Indian travelers.
+
+You help with:
+- Trip planning and detailed itineraries
+- Travel advice and practical tips
+- Destination recommendations
+- Budget planning guidance
+- Transportation suggestions
+- Local culture and food recommendations
+
+Guidelines:
+- Be helpful, practical, and enthusiastic about travel
+- Assume all costs are in INR unless specified otherwise
+- Provide specific, actionable advice
+- Include practical tips for Indian travelers
+- Suggest realistic budgets and timeframes
+- Consider seasonal factors and local events"""),
+            MessagesPlaceholder(variable_name="chat_history"),
+            ("human", "{input}")
+        ])
+        
+        # Create LangChain chain
+        self.chain = self.prompt_template | self.llm | self.output_parser
 
     def chat(self, user_input: str) -> str:
         try:
-            # Add user message to history
-            self.conversation_history.append(f"User: {user_input}")
+            # Check if user wants specific tools first
+            tool_response = self._check_tools(user_input)
+            if tool_response:
+                # Add to conversation history
+                self._add_to_history(user_input, tool_response)
+                return tool_response
             
-            # Check if user wants specific tools
-            response = self._process_with_tools(user_input)
+            # Use LangChain chain for general travel planning
+            response = self.chain.invoke({
+                "input": user_input,
+                "chat_history": self.conversation_history[-6:]  # Last 3 exchanges
+            })
             
-            # Add AI response to history
-            self.conversation_history.append(f"AI: {response}")
+            # Add to conversation history
+            self._add_to_history(user_input, response)
             
             return response
+            
         except Exception as e:
-            return f"Error: {str(e)}"
+            error_msg = f"I apologize, but I encountered an error: {str(e)}. Please try rephrasing your question."
+            return error_msg
 
-    def _process_with_tools(self, user_input: str) -> str:
+    def _check_tools(self, user_input: str) -> str:
+        """Check if user input requires specific tools"""
         user_lower = user_input.lower()
         
-        # Check for budget calculation
+        # Budget calculation tool
         if "budget" in user_lower and "," in user_input:
-            # Extract budget parameters
             parts = [p.strip() for p in user_input.split() if "," in p]
             if parts:
                 budget_result = calculate_budget(parts[0])
-                return f"Budget calculation: {budget_result}"
+                return budget_result
         
-        # Check for weather request
-        if "weather" in user_lower:
-            # Extract destination
-            words = user_input.split()
-            for i, word in enumerate(words):
-                if word.lower() in ["in", "for", "at"] and i + 1 < len(words):
-                    destination = words[i + 1].replace("?", "").replace(".", "")
-                    weather_result = get_weather(destination)
-                    return f"Weather info: {weather_result}"
+        # Weather tool
+        if any(word in user_lower for word in ["weather", "climate", "temperature"]):
+            destination = self._extract_destination(user_input)
+            if destination:
+                weather_result = get_weather(destination)
+                return weather_result
         
-        # Check for hotel request
-        if any(word in user_lower for word in ["hotel", "stay", "accommodation"]):
-            # Extract destination
-            words = user_input.split()
-            for i, word in enumerate(words):
-                if word.lower() in ["in", "for", "at"] and i + 1 < len(words):
-                    destination = words[i + 1].replace("?", "").replace(".", "")
-                    hotel_result = search_hotels(destination)
-                    return f"Hotel suggestions: {hotel_result}"
+        # Hotel tool
+        if any(word in user_lower for word in ["hotel", "stay", "accommodation", "lodge", "resort"]):
+            destination = self._extract_destination(user_input)
+            if destination:
+                hotel_result = search_hotels(destination)
+                return hotel_result
         
-        # For general travel planning, use LLM
-        return self._get_llm_response(user_input)
+        return None
 
-    def _get_llm_response(self, user_input: str) -> str:
-        system_prompt = """You are an AI Travel Concierge for Indian travelers.
-
-You help with:
-- Trip planning and itineraries
-- Travel advice and tips
-- Destination recommendations
-- Budget planning guidance
-
-Be helpful, practical, and assume all costs are in INR unless specified otherwise.
-Keep responses concise and actionable."""
-
-        # Include recent conversation history for context
-        context = ""
-        if self.conversation_history:
-            recent_history = self.conversation_history[-4:]  # Last 2 exchanges
-            context = "\n".join(recent_history) + "\n"
-
-        messages = [
-            SystemMessage(content=system_prompt),
-            HumanMessage(content=f"{context}User: {user_input}")
+    def _extract_destination(self, user_input: str) -> str:
+        """Extract destination from user input"""
+        words = user_input.split()
+        
+        # Look for common prepositions followed by destination
+        prepositions = ["in", "for", "at", "to", "near", "around"]
+        
+        for i, word in enumerate(words):
+            if word.lower() in prepositions and i + 1 < len(words):
+                # Get the next word and clean it
+                destination = words[i + 1].replace("?", "").replace(".", "").replace(",", "")
+                return destination
+        
+        # If no preposition found, look for known destinations
+        known_destinations = [
+            "goa", "jaipur", "manali", "delhi", "mumbai", "kerala", 
+            "udaipur", "shimla", "bangalore", "chennai", "kolkata",
+            "agra", "varanasi", "rishikesh", "darjeeling", "ooty"
         ]
+        
+        for word in words:
+            clean_word = word.lower().replace("?", "").replace(".", "").replace(",", "")
+            if clean_word in known_destinations:
+                return clean_word
+        
+        return None
 
-        response = self.llm.invoke(messages)
-        return response.content
+    def _add_to_history(self, user_input: str, ai_response: str):
+        """Add messages to conversation history in LangChain format"""
+        self.conversation_history.append(HumanMessage(content=user_input))
+        self.conversation_history.append(AIMessage(content=ai_response))
+        
+        # Keep only last 10 messages to prevent context overflow
+        if len(self.conversation_history) > 10:
+            self.conversation_history = self.conversation_history[-10:]
+
+    def clear_history(self):
+        """Clear conversation history"""
+        self.conversation_history = []
