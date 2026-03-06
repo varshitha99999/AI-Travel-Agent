@@ -6,6 +6,7 @@ from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 from langchain_core.output_parsers import StrOutputParser
 
 from agent.budget import calculate_budget
+from agent.memory import TravelMemory
 from services.weather import get_weather
 from services.hotels import search_hotels
 
@@ -14,7 +15,7 @@ load_dotenv()
 
 class TripPlanner:
     def __init__(self):
-        # Initialize LangChain ChatGroq with proper configuration
+        # Initialize LangChain ChatGroq
         self.llm = ChatGroq(
             groq_api_key=os.getenv("GROQ_API_KEY"),
             model_name="llama-3.3-70b-versatile",
@@ -23,13 +24,13 @@ class TripPlanner:
             timeout=30,
         )
         
+        # Initialize memory
+        self.memory = TravelMemory()
+        
         # LangChain output parser
         self.output_parser = StrOutputParser()
         
-        # Conversation memory using LangChain message format
-        self.conversation_history = []
-        
-        # Create LangChain prompt template
+        # Create LangChain prompt template with memory
         self.prompt_template = ChatPromptTemplate.from_messages([
             ("system", """You are an AI Travel Concierge for Indian travelers.
 
@@ -47,7 +48,15 @@ Guidelines:
 - Provide specific, actionable advice
 - Include practical tips for Indian travelers
 - Suggest realistic budgets and timeframes
-- Consider seasonal factors and local events"""),
+- Consider seasonal factors and local events
+- Use conversation history to provide contextual responses
+- If asked about previous plans, refer to the conversation history
+
+IMPORTANT: When providing trip plans, always include:
+- Day-wise itinerary
+- Estimated costs
+- Travel tips
+- Accommodation suggestions"""),
             MessagesPlaceholder(variable_name="chat_history"),
             ("human", "{input}")
         ])
@@ -60,18 +69,23 @@ Guidelines:
             # Check if user wants specific tools first
             tool_response = self._check_tools(user_input)
             if tool_response:
-                # Add to conversation history
-                self._add_to_history(user_input, tool_response)
+                # Add to memory
+                self.memory.add_user_message(user_input)
+                self.memory.add_ai_message(tool_response)
                 return tool_response
             
-            # Use LangChain chain for general travel planning
+            # Get chat history from memory
+            chat_history = self.memory.get_chat_history()
+            
+            # Use LangChain chain for general travel planning with memory
             response = self.chain.invoke({
                 "input": user_input,
-                "chat_history": self.conversation_history[-6:]  # Last 3 exchanges
+                "chat_history": chat_history
             })
             
-            # Add to conversation history
-            self._add_to_history(user_input, response)
+            # Add conversation to memory
+            self.memory.add_user_message(user_input)
+            self.memory.add_ai_message(response)
             
             return response
             
@@ -89,6 +103,11 @@ Guidelines:
             if parts:
                 budget_result = calculate_budget(parts[0])
                 return budget_result
+        
+        # Check for budget questions related to previous conversations
+        if any(word in user_lower for word in ["budget", "cost", "expense", "price"]) and not "," in user_input:
+            # Let the LLM handle budget questions with conversation context
+            return None
         
         # Weather tool
         if any(word in user_lower for word in ["weather", "climate", "temperature"]):
@@ -133,15 +152,21 @@ Guidelines:
         
         return None
 
-    def _add_to_history(self, user_input: str, ai_response: str):
-        """Add messages to conversation history in LangChain format"""
-        self.conversation_history.append(HumanMessage(content=user_input))
-        self.conversation_history.append(AIMessage(content=ai_response))
-        
-        # Keep only last 10 messages to prevent context overflow
-        if len(self.conversation_history) > 10:
-            self.conversation_history = self.conversation_history[-10:]
+    def clear_memory(self):
+        """Clear conversation memory"""
+        self.memory.clear_memory()
 
-    def clear_history(self):
-        """Clear conversation history"""
-        self.conversation_history = []
+    def get_conversation_summary(self):
+        """Get a summary of the current conversation"""
+        chat_history = self.memory.get_chat_history()
+        if not chat_history:
+            return "No conversation history available."
+        
+        summary = "Recent conversation:\n"
+        for i, message in enumerate(chat_history[-4:]):  # Last 2 exchanges
+            if isinstance(message, HumanMessage):
+                summary += f"User: {message.content[:100]}...\n"
+            elif isinstance(message, AIMessage):
+                summary += f"AI: {message.content[:100]}...\n"
+        
+        return summary
