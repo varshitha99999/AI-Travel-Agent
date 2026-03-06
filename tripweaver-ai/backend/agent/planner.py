@@ -1,4 +1,5 @@
 import os
+from pathlib import Path
 from dotenv import load_dotenv
 from langchain_groq import ChatGroq
 from langchain_core.messages import HumanMessage, SystemMessage, AIMessage
@@ -8,9 +9,10 @@ from langchain_core.output_parsers import StrOutputParser
 from agent.budget import calculate_budget
 from agent.memory import TravelMemory
 from services.weather import get_weather
-from services.hotels import search_hotels
+from services.hotels import get_hotels
 
-load_dotenv()
+_ENV_PATH = (Path(__file__).resolve().parent.parent / ".env")
+load_dotenv(dotenv_path=str(_ENV_PATH))
 
 
 class TripPlanner:
@@ -120,7 +122,7 @@ IMPORTANT: When providing trip plans, always include:
         if any(word in user_lower for word in ["hotel", "stay", "accommodation", "lodge", "resort"]):
             destination = self._extract_destination(user_input)
             if destination:
-                hotel_result = search_hotels(destination)
+                hotel_result = get_hotels(destination)
                 return hotel_result
         
         return None

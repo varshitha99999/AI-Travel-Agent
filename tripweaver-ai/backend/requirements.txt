@@ -3,3 +3,4 @@ langchain-groq
 chainlit
 python-dotenv
 pydantic
+requests

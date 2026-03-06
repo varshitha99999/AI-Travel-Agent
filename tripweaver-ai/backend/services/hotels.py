@@ -1,69 +1,151 @@
-def search_hotels(destination: str) -> str:
-    """Search for hotels in a destination with realistic recommendations"""
-    
-    # Hotel database with popular Indian destinations
-    hotels_db = {
-        "goa": [
-            {"name": "Taj Fort Aguada", "price": "₹8,000/night", "rating": "4.5★", "type": "Luxury"},
-            {"name": "Lemon Tree Amarante", "price": "₹3,500/night", "rating": "4.2★", "type": "Mid-range"},
-            {"name": "Zostel Goa", "price": "₹800/night", "rating": "4.0★", "type": "Hostel"},
-        ],
-        "jaipur": [
-            {"name": "Rambagh Palace", "price": "₹15,000/night", "rating": "4.7★", "type": "Heritage"},
-            {"name": "Hotel Pearl Palace", "price": "₹2,500/night", "rating": "4.3★", "type": "Budget"},
-            {"name": "Zostel Jaipur", "price": "₹600/night", "rating": "4.1★", "type": "Hostel"},
-        ],
-        "manali": [
-            {"name": "The Himalayan", "price": "₹6,000/night", "rating": "4.4★", "type": "Resort"},
-            {"name": "Johnson Lodge", "price": "₹2,000/night", "rating": "4.0★", "type": "Mid-range"},
-            {"name": "Backpackers Nest", "price": "₹500/night", "rating": "3.9★", "type": "Hostel"},
-        ],
-        "delhi": [
-            {"name": "The Leela Palace", "price": "₹12,000/night", "rating": "4.6★", "type": "Luxury"},
-            {"name": "Hotel Godwin", "price": "₹2,800/night", "rating": "4.2★", "type": "Mid-range"},
-            {"name": "Zostel Delhi", "price": "₹700/night", "rating": "4.0★", "type": "Hostel"},
-        ],
-        "mumbai": [
-            {"name": "Taj Mahal Palace", "price": "₹18,000/night", "rating": "4.8★", "type": "Luxury"},
-            {"name": "Hotel Suba Palace", "price": "₹3,200/night", "rating": "4.1★", "type": "Mid-range"},
-            {"name": "Backpacker Panda", "price": "₹900/night", "rating": "3.8★", "type": "Hostel"},
-        ],
-        "kerala": [
-            {"name": "Kumarakom Lake Resort", "price": "₹10,000/night", "rating": "4.6★", "type": "Resort"},
-            {"name": "Spice Village", "price": "₹4,500/night", "rating": "4.3★", "type": "Eco-resort"},
-            {"name": "Malabar House", "price": "₹2,000/night", "rating": "4.0★", "type": "Budget"},
-        ],
-        "udaipur": [
-            {"name": "Taj Lake Palace", "price": "₹20,000/night", "rating": "4.9★", "type": "Heritage"},
-            {"name": "Jaiwana Haveli", "price": "₹3,000/night", "rating": "4.2★", "type": "Heritage"},
-            {"name": "Zostel Udaipur", "price": "₹650/night", "rating": "4.1★", "type": "Hostel"},
-        ],
-    }
-    
-    # Normalize destination name
-    dest_lower = destination.lower().strip()
-    
-    # Find matching hotels
-    hotels = hotels_db.get(dest_lower)
-    
-    if hotels:
-        result = f"🏨 **Hotels in {destination.title()}:**\n\n"
-        for hotel in hotels:
-            result += f"• **{hotel['name']}** ({hotel['type']})\n"
-            result += f"  💰 {hotel['price']} | {hotel['rating']}\n\n"
-        result += "💡 Tip: Book in advance for better rates!"
-        return result
-    else:
-        # Generic response for unlisted destinations
-        return f"""🏨 **Hotels in {destination.title()}:**
+import requests
+from typing import Dict, List, Optional
 
-• **Budget Hotels** (₹1,500-2,500/night)
-  Good for backpackers and budget travelers
+USER_AGENT = "TripWeaverAI/1.0 (contact: support@tripweaver.ai)"
 
-• **Mid-range Hotels** (₹3,000-5,000/night)
-  Comfortable stays with good amenities
+def _geocode_city(city: str) -> Optional[Dict]:
+    url = "https://nominatim.openstreetmap.org/search"
+    params = {"q": city, "format": "json", "limit": 1}
+    headers = {"User-Agent": USER_AGENT}
+    r = requests.get(url, params=params, headers=headers, timeout=15)
+    r.raise_for_status()
+    data = r.json()
+    if not data:
+        return None
+    bbox = [float(x) for x in data[0]["boundingbox"]]  # [south, north, west, east]
+    return {"display_name": data[0]["display_name"], "bbox": bbox}
 
-• **Luxury Hotels** (₹8,000+/night)
-  Premium experience with top facilities
+def _query_overpass_hotels(bbox: List[float]) -> List[Dict]:
+    south, north, west, east = bbox
+    query = f"""
+    [out:json][timeout:25];
+    (node["tourism"~"hotel|guest_house|hostel"]({south},{west},{north},{east});
+     way["tourism"~"hotel|guest_house|hostel"]({south},{west},{north},{east});
+     relation["tourism"~"hotel|guest_house|hostel"]({south},{west},{north},{east});
+    );
+    out center 30;
+    """
+    endpoints = [
+        "https://overpass-api.de/api/interpreter",
+        "https://overpass.kumi.systems/api/interpreter",
+        "https://overpass.openstreetmap.ru/api/interpreter",
+    ]
+    headers = {"User-Agent": USER_AGENT}
+    last_err = None
+    for url in endpoints:
+        try:
+            r = requests.post(url, data=query, headers=headers, timeout=45)
+            r.raise_for_status()
+            data = r.json()
+            break
+        except Exception as e:
+            last_err = e
+            data = {}
+            continue
+    elements = data.get("elements", [])
+    results = []
+    seen = set()
+    for el in elements:
+        tags = el.get("tags", {})
+        name = tags.get("name")
+        if not name or name.lower() in seen:
+            continue
+        seen.add(name.lower())
+        typ = tags.get("tourism")
+        lat = el.get("lat") or (el.get("center", {}) or {}).get("lat")
+        lon = el.get("lon") or (el.get("center", {}) or {}).get("lon")
+        results.append({"name": name, "type": typ, "lat": lat, "lon": lon})
+        if len(results) >= 20:
+            break
+    return results
 
-💡 Tip: Check booking.com, MakeMyTrip, or Goibibo for current availability and prices in {destination}."""
+def _amadeus_base(env: str) -> str:
+    return "https://api.amadeus.com" if (env or "").lower() == "prod" else "https://test.api.amadeus.com"
+
+def _amadeus_token(api_key: str, api_secret: str, env: str) -> Optional[str]:
+    if not (api_key and api_secret):
+        return None
+    url = f"{_amadeus_base(env)}/v1/security/oauth2/token"
+    data = {"grant_type": "client_credentials", "client_id": api_key, "client_secret": api_secret}
+    r = requests.post(url, data=data, timeout=20)
+    r.raise_for_status()
+    return r.json().get("access_token")
+
+def _amadeus_hotels_by_geocode(lat: float, lon: float, token: str, env: str) -> List[Dict]:
+    url = f"{_amadeus_base(env)}/v1/reference-data/locations/hotels/by-geocode"
+    headers = {"Authorization": f"Bearer {token}", "User-Agent": USER_AGENT}
+    params = {"latitude": lat, "longitude": lon, "radius": 20, "radiusUnit": "KM"}
+    r = requests.get(url, headers=headers, params=params, timeout=20)
+    r.raise_for_status()
+    data = r.json()
+    items = data.get("data", []) or []
+    out = []
+    for it in items:
+        name = it.get("name")
+        if not name:
+            continue
+        out.append({"name": name, "type": "hotel"})
+        if len(out) >= 18:
+            break
+    return out
+
+def get_hotels(city: str) -> str:
+    # Read env at call time to ensure .env has been loaded
+    import os
+    hotels_provider = os.getenv("HOTELS_PROVIDER")
+    amadeus_api_key = os.getenv("AMADEUS_API_KEY")
+    amadeus_api_secret = os.getenv("AMADEUS_API_SECRET")
+    amadeus_env = os.getenv("AMADEUS_ENV", "test")
+
+    if (hotels_provider and hotels_provider.lower() == "amadeus") or (amadeus_api_key and amadeus_api_secret):
+        try:
+            loc = _geocode_city(city)
+            if not loc:
+                return f"🏨 Hotels in {city.title()}\n\nCould not locate this city."
+            token = _amadeus_token(amadeus_api_key, amadeus_api_secret, amadeus_env)
+            if not token:
+                return f"❌ Hotel service error for {city.title()}: Missing Amadeus credentials"
+            bbox = loc["bbox"]
+            lat = (bbox[0] + bbox[1]) / 2.0
+            lon = (bbox[2] + bbox[3]) / 2.0
+            hotels = _amadeus_hotels_by_geocode(lat, lon, token, amadeus_env)
+            if not hotels:
+                return f"🏨 Hotels in {city.title()} (Amadeus)\n\nNo hotels found near this area."
+            lines = [f"🏨 Hotels in {city.title()} (Amadeus)"]
+            lines.append("\nHotels")
+            for h in hotels[:10]:
+                lines.append(f"• {h['name']}")
+            return "\n".join(lines)
+        except requests.HTTPError as e:
+            return f"❌ Hotel service error for {city.title()}: {e.response.status_code}"
+        except Exception as e:
+            return f"❌ Could not fetch hotels for {city.title()}: {str(e)}"
+    try:
+        loc = _geocode_city(city)
+        if not loc:
+            return f"🏨 Hotels in {city.title()}\n\nCould not locate this city."
+        hotels = _query_overpass_hotels(loc["bbox"])
+        if not hotels:
+            return f"🏨 Hotels in {city.title()}\n\nNo hotels found via OpenStreetMap for this area."
+        # Simple grouping
+        hostels = [h for h in hotels if (h.get("type") or "").lower() == "hostel"]
+        guests = [h for h in hotels if (h.get("type") or "").lower() == "guest_house"]
+        normal = [h for h in hotels if (h.get("type") or "").lower() == "hotel"]
+        result = [f"🏨 Hotels in {city.title()} (data: OpenStreetMap)"]
+        if normal:
+            result.append("\nHotels")
+            for h in normal[:6]:
+                result.append(f"• {h['name']}")
+        if guests:
+            result.append("\nGuest Houses")
+            for h in guests[:6]:
+                result.append(f"• {h['name']}")
+        if hostels:
+            result.append("\nHostels")
+            for h in hostels[:6]:
+                result.append(f"• {h['name']}")
+        return "\n".join(result)
+    except requests.HTTPError as e:
+        return f"❌ Hotel service error for {city.title()}: {e.response.status_code}"
+    except Exception as e:
+        return f"❌ Could not fetch hotels for {city.title()}: {str(e)} (Overpass may be busy; try again in a minute)"
