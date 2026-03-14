@@ -149,3 +149,4 @@ def get_hotels(city: str) -> str:
         return f"❌ Hotel service error for {city.title()}: {e.response.status_code}"
     except Exception as e:
         return f"❌ Could not fetch hotels for {city.title()}: {str(e)} (Overpass may be busy; try again in a minute)"
+
