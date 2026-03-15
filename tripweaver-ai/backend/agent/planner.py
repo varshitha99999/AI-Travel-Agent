@@ -2,173 +2,230 @@ import os
 from pathlib import Path
 from dotenv import load_dotenv
 from langchain_groq import ChatGroq
-from langchain_core.messages import HumanMessage, SystemMessage, AIMessage
+from langchain_core.messages import HumanMessage, AIMessage, SystemMessage
 from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 from langchain_core.output_parsers import StrOutputParser
+from langchain_classic.agents import create_tool_calling_agent, AgentExecutor
 
-from agent.budget import calculate_budget
 from agent.memory import TravelMemory
-from services.weather import get_weather
-from services.hotels import get_hotels
+from agent.tools import ALL_TOOLS
 
-_ENV_PATH = (Path(__file__).resolve().parent.parent / ".env")
+_ENV_PATH = Path(__file__).resolve().parent.parent / ".env"
 load_dotenv(dotenv_path=str(_ENV_PATH))
+
+SYSTEM_PROMPT = """You are TripWeaver, an AI Travel Concierge for Indian travelers.
+
+━━━ TOOL USAGE RULES (follow strictly) ━━━
+
+1. WeatherTool — call this when the user asks about weather, rain, temperature, climate, or forecast.
+   - "what's the weather in Goa" → call WeatherTool("Goa")
+   - "what is the weather there" / "what's the weather" → use destination from context, call WeatherTool("Goa")
+   - After getting the tool result, FIRST copy the COMPLETE weather tool output word for word, THEN suggest places.
+   - NEVER respond to a weather question with an itinerary. NEVER skip calling WeatherTool.
+   - The weather tool output starts with "🌤 **Current Weather in..." — copy everything from that line until "_Source:..." including temperature, humidity, condition, wind, travel advice, and 7-day forecast.
+   - Response format for weather:
+     [PASTE FULL WeatherTool output here — every single line]
+
+     **🗺️ Best Places to Visit in [Destination] Given This Weather:**
+     - **[Place 1]** — [one line: why it suits current weather/temperature]
+     - **[Place 2]** — [one line: why it suits current weather/temperature]
+     - **[Place 3]** — [one line: why it suits current weather/temperature]
+
+2. HotelTool — call this when the user asks about hotels, accommodation, where to stay, or hostels.
+   - "suggest hotels in Jaipur" → call HotelTool("Jaipur")
+   - "what about hotels?" → use destination from context, call HotelTool
+   - NEVER make up hotel names. ALWAYS call HotelTool.
+
+3. BudgetTool — call this when the user provides BOTH a total amount AND number of days.
+   - "my budget is ₹15000 for 3 days" → call BudgetTool("15000,3")
+   - "budget is 15000 INR for 3 days" → call BudgetTool("15000,3")
+   - "what will the budget be?" → DO NOT call BudgetTool. Summarise costs from the itinerary already given.
+   - INPUT must be exactly "AMOUNT,DAYS" — extract only the digits, e.g. "15000,3"
+   - Call BudgetTool ONCE only. Do not retry if it returns a result.
+
+4. Itineraries, packing lists, travel tips → use your own knowledge, NO tools needed.
+
+━━━ FOLLOW-UP QUESTION RULES ━━━
+- "what will the budget be?" / "how much will it cost?" → summarise the cost breakdown from the itinerary you already gave. Do NOT call BudgetTool unless the user gives a new total amount.
+- "what is the weather there?" / "how's the weather?" → call WeatherTool with the destination already in context. Then present the FULL tool output to the user — do not paraphrase or shorten it.
+- "suggest hotels" / "where to stay?" → call HotelTool with the destination already in context. Then present the FULL list of hotels from the tool output — do not paraphrase or say "I found some hotels".
+- NEVER ask for the destination again if it is already in the conversation context.
+
+━━━ TOOL OUTPUT RULES ━━━
+- After calling WeatherTool: copy the tool output directly into your response. Do not say "I hope this helps" instead of the data.
+- After calling HotelTool: copy the full hotel list from the tool output. Do not say "I found some hotels" without listing them.
+- After calling BudgetTool: copy the full breakdown from the tool output.
+- NEVER replace tool output with a generic message. If a tool returns data, show it.
+
+━━━ EDGE CASES ━━━
+- Unknown destination: say you don't have info, suggest nearby popular alternatives.
+- Very low budget (under ₹500/day): acknowledge the constraint honestly, suggest hostels/street food/local buses.
+- Vague query ("plan a trip"): ask ONE clarifying question — destination, duration, or budget.
+- Off-topic queries: politely redirect to travel planning.
+
+━━━ RESPONSE FORMAT ━━━
+
+For trip itineraries:
+**Day 1: [Theme]**
+- 🌅 Morning: [activity] — ₹X
+- ☀️ Afternoon: [activity] — ₹X
+- 🌙 Evening: [activity] — ₹X
+
+(repeat for each day)
+
+**💰 Budget Summary**
+- 🏨 Accommodation: ₹X/night
+- 🍽 Food: ₹X/day
+- 🚌 Transport: ₹X total
+- 🎯 Activities: ₹X total
+- **Total Estimate: ₹X**
+
+**✈️ Travel Tips**
+- [practical tip]
+- [best time / what to pack / local advice]
+
+For all responses:
+- Use **bold** for section headings
+- Use bullet points and emojis for readability
+- Always use ₹ for costs
+- Keep responses concise — avoid walls of text
+- Tailor suggestions to travel style (budget/luxury/adventure/family/honeymoon/solo)"""
 
 
 class TripPlanner:
     def __init__(self):
-        # Initialize LangChain ChatGroq
+        # Initialize LangChain ChatGroq with tool-calling support
         self.llm = ChatGroq(
             groq_api_key=os.getenv("GROQ_API_KEY"),
-            model_name="llama-3.3-70b-versatile",
-            temperature=0.7,
-            max_tokens=1000,
+            model_name="llama-3.1-8b-instant",
+            temperature=0.4,
+            max_tokens=2048,
             timeout=30,
         )
-        
+
         # Initialize memory
         self.memory = TravelMemory()
-        
-        # LangChain output parser
-        self.output_parser = StrOutputParser()
-        
-        # Create LangChain prompt template with memory
-        self.prompt_template = ChatPromptTemplate.from_messages([
-            ("system", """You are an AI Travel Concierge for Indian travelers.
 
-You help with:
-- Trip planning and detailed itineraries
-- Travel advice and practical tips
-- Destination recommendations
-- Budget planning guidance
-- Transportation suggestions
-- Local culture and food recommendations
+        # Bind tools to LLM
+        self.llm_with_tools = self.llm.bind_tools(ALL_TOOLS)
 
-Guidelines:
-- Be helpful, practical, and enthusiastic about travel
-- Assume all costs are in INR unless specified otherwise
-- Provide specific, actionable advice
-- Include practical tips for Indian travelers
-- Suggest realistic budgets and timeframes
-- Consider seasonal factors and local events
-- Use conversation history to provide contextual responses
-- If asked about previous plans, refer to the conversation history
-
-IMPORTANT: When providing trip plans, always include:
-- Day-wise itinerary
-- Estimated costs
-- Travel tips
-- Accommodation suggestions"""),
+        # Prompt template for tool-calling agent
+        self.prompt = ChatPromptTemplate.from_messages([
+            ("system", SYSTEM_PROMPT),
             MessagesPlaceholder(variable_name="chat_history"),
-            ("human", "{input}")
+            ("human", "{input}"),
+            MessagesPlaceholder(variable_name="agent_scratchpad"),
         ])
-        
-        # Create LangChain chain
-        self.chain = self.prompt_template | self.llm | self.output_parser
+
+        # Use llm_with_tools so tool-calling is reliably triggered
+        agent = create_tool_calling_agent(self.llm_with_tools, ALL_TOOLS, self.prompt)
+
+        # Agent executor with error handling
+        self.agent_executor = AgentExecutor(
+            agent=agent,
+            tools=ALL_TOOLS,
+            verbose=False,
+            handle_parsing_errors=True,
+            max_iterations=5,
+            max_execution_time=60,
+            return_intermediate_steps=True,
+        )
+
+    def _resolve_input(self, user_input: str) -> str:
+        """
+        If the user asks a follow-up weather/hotel question without naming a destination,
+        inject the known destination from memory so the agent always gets an explicit city.
+        """
+        u = user_input.lower().strip()
+        dest = self.memory.context.destination
+
+        if not dest:
+            return user_input
+
+        # Weather follow-ups without an explicit city
+        weather_followups = [
+            "what is the weather there", "what's the weather there",
+            "how's the weather", "how is the weather", "weather there",
+            "weather in that place", "what about the weather",
+            "will it rain", "is it hot", "is it cold", "what is the climate",
+            "what's the weather", "what is the weather", "hows the weather",
+            "weather forecast", "check weather", "tell me the weather",
+        ]
+        if any(phrase in u for phrase in weather_followups) and dest.lower() not in u:
+            return f"What is the weather in {dest}?"
+
+        # Hotel follow-ups without an explicit city
+        hotel_followups = [
+            "suggest hotels", "find hotels", "what about hotels",
+            "where to stay", "hotels there", "accommodation there",
+            "suggest accommodation", "find hostels", "hotels within my budget",
+            "suggest hotels within my budget",
+        ]
+        if any(phrase in u for phrase in hotel_followups) and dest.lower() not in u:
+            return f"Suggest hotels in {dest}"
+
+        return user_input
 
     def chat(self, user_input: str) -> str:
+        # Rewrite vague follow-ups to include explicit destination
+        resolved_input = self._resolve_input(user_input)
         try:
-            # Check if user wants specific tools first
-            tool_response = self._check_tools(user_input)
-            if tool_response:
-                # Add to memory
-                self.memory.add_user_message(user_input)
-                self.memory.add_ai_message(tool_response)
-                return tool_response
-            
-            # Get chat history from memory
             chat_history = self.memory.get_chat_history()
-            
-            # Use LangChain chain for general travel planning with memory
-            response = self.chain.invoke({
-                "input": user_input,
-                "chat_history": chat_history
+
+            result = self.agent_executor.invoke({
+                "input": resolved_input,
+                "chat_history": chat_history,
             })
-            
-            # Add conversation to memory
-            self.memory.add_user_message(user_input)
-            self.memory.add_ai_message(response)
-            
-            return response
-            
-        except Exception as e:
-            error_msg = f"I apologize, but I encountered an error: {str(e)}. Please try rephrasing your question."
-            return error_msg
 
-    def _check_tools(self, user_input: str) -> str:
-        """Check if user input requires specific tools"""
-        user_lower = user_input.lower()
-        
-        # Budget calculation tool
-        if "budget" in user_lower and "," in user_input:
-            parts = [p.strip() for p in user_input.split() if "," in p]
-            if parts:
-                budget_result = calculate_budget(parts[0])
-                return budget_result
-        
-        # Check for budget questions related to previous conversations
-        if any(word in user_lower for word in ["budget", "cost", "expense", "price"]) and not "," in user_input:
-            # Let the LLM handle budget questions with conversation context
-            return None
-        
-        # Weather tool
-        if any(word in user_lower for word in ["weather", "climate", "temperature"]):
-            destination = self._extract_destination(user_input)
-            if destination:
-                weather_result = get_weather(destination)
-                return weather_result
-        
-        # Hotel tool
-        if any(word in user_lower for word in ["hotel", "stay", "accommodation", "lodge", "resort"]):
-            destination = self._extract_destination(user_input)
-            if destination:
-                hotel_result = get_hotels(destination)
-                return hotel_result
-        
-        return None
+            response = result.get("output", "")
 
-    def _extract_destination(self, user_input: str) -> str:
-        """Extract destination from user input"""
-        words = user_input.split()
-        
-        # Look for common prepositions followed by destination
-        prepositions = ["in", "for", "at", "to", "near", "around"]
-        
-        for i, word in enumerate(words):
-            if word.lower() in prepositions and i + 1 < len(words):
-                # Get the next word and clean it
-                destination = words[i + 1].replace("?", "").replace(".", "").replace(",", "")
-                return destination
-        
-        # If no preposition found, look for known destinations
-        known_destinations = [
-            "goa", "jaipur", "manali", "delhi", "mumbai", "kerala", 
-            "udaipur", "shimla", "bangalore", "chennai", "kolkata",
-            "agra", "varanasi", "rishikesh", "darjeeling", "ooty"
-        ]
-        
-        for word in words:
-            clean_word = word.lower().replace("?", "").replace(".", "").replace(",", "")
-            if clean_word in known_destinations:
-                return clean_word
-        
-        return None
+            # If agent output is empty or stopped, use raw tool output from intermediate steps
+            if not response or "agent stopped" in response.lower():
+                steps = result.get("intermediate_steps", [])
+                if steps:
+                    # Grab the last tool output
+                    tool_output = steps[-1][1] if steps else ""
+                    if tool_output:
+                        response = tool_output
+                    else:
+                        raise ValueError("Empty response")
+                else:
+                    raise ValueError("Empty response")
+
+        except Exception:
+            # Fallback: use plain LLM chain without tools
+            try:
+                fallback_prompt = ChatPromptTemplate.from_messages([
+                    ("system", SYSTEM_PROMPT),
+                    MessagesPlaceholder(variable_name="chat_history"),
+                    ("human", "{input}"),
+                ])
+                fallback_chain = fallback_prompt | self.llm | StrOutputParser()
+                response = fallback_chain.invoke({
+                    "input": resolved_input,
+                    "chat_history": self.memory.get_chat_history(),
+                })
+            except Exception as e:
+                return f"I apologize, I encountered an error: {str(e)}. Please try again."
+
+        # Only user messages update travel context; AI messages stored directly
+        self.memory.add_user_message(user_input)
+        self.memory.messages.append(AIMessage(content=response))
+        return response
 
     def clear_memory(self):
-        """Clear conversation memory"""
         self.memory.clear_memory()
 
-    def get_conversation_summary(self):
-        """Get a summary of the current conversation"""
+    def get_conversation_summary(self) -> str:
         chat_history = self.memory.get_chat_history()
         if not chat_history:
             return "No conversation history available."
-        
         summary = "Recent conversation:\n"
-        for i, message in enumerate(chat_history[-4:]):  # Last 2 exchanges
-            if isinstance(message, HumanMessage):
-                summary += f"User: {message.content[:100]}...\n"
-            elif isinstance(message, AIMessage):
-                summary += f"AI: {message.content[:100]}...\n"
-        
+        for msg in chat_history[-4:]:
+            if isinstance(msg, HumanMessage):
+                summary += f"User: {msg.content[:100]}...\n"
+            elif isinstance(msg, AIMessage):
+                summary += f"AI: {msg.content[:100]}...\n"
         return summary
+
+        
