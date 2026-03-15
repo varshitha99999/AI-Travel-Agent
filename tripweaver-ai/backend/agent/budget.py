@@ -11,7 +11,7 @@ def calculate_budget(input_text: str) -> str:
                 "Example: 15000,3 (₹15,000 for 3 days)"
             )
 
-        total_budget = float(parts[0].replace("₹", "").replace("rs", "").replace("inr", ""))
+        total_budget = float(parts[0].lower().replace("₹", "").replace("rs", "").replace("inr", "").strip())
         days = int(parts[1])
 
         if total_budget <= 0:

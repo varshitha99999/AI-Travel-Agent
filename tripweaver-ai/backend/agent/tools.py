@@ -37,7 +37,10 @@ def weather_tool(city: str) -> str:
     INPUT: City name only — no country, no extra words.
     Examples: 'Goa'  |  'Manali'  |  'Jaipur'  |  'Mumbai'  |  'Darjeeling'
     """
-    return get_weather(city)
+    result = get_weather(city)
+    if not result:
+        return f"⚠️ Could not fetch weather data for {city}. Please try again later."
+    return result
 
 
 @tool
@@ -53,7 +56,10 @@ def hotel_tool(city: str) -> str:
     INPUT: City name only — no country, no extra words.
     Examples: 'Goa'  |  'Manali'  |  'Jaipur'  |  'Mumbai'  |  'Rishikesh'
     """
-    return get_hotels(city)
+    result = get_hotels(city)
+    if not result:
+        return f"⚠️ Could not fetch hotel data for {city}. Please try again later."
+    return result
 
 
 # All tools registered for the agent

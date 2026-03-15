@@ -106,8 +106,8 @@ class TripPlanner:
             MessagesPlaceholder(variable_name="agent_scratchpad"),
         ])
 
-        # Create tool-calling agent
-        agent = create_tool_calling_agent(self.llm, ALL_TOOLS, self.prompt)
+        # Use llm_with_tools so tool-calling is reliably triggered
+        agent = create_tool_calling_agent(self.llm_with_tools, ALL_TOOLS, self.prompt)
 
         # Agent executor with error handling
         self.agent_executor = AgentExecutor(
@@ -147,8 +147,9 @@ class TripPlanner:
             except Exception as e:
                 return f"I apologize, I encountered an error: {str(e)}. Please try again."
 
+        # Only user messages update travel context; AI messages stored directly
         self.memory.add_user_message(user_input)
-        self.memory.add_ai_message(response)
+        self.memory.messages.append(AIMessage(content=response))
         return response
 
     def clear_memory(self):
