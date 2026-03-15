@@ -91,19 +91,37 @@ async def main(message: cl.Message):
 
 
 async def _handle_query(user_input: str):
-    """Core handler — runs agent and streams formatted response"""
+    """Core handler — streams agent response token by token"""
     planner = cl.user_session.get("planner")
 
-    # Show context bar while thinking
     async with cl.Step(name="🤖 Thinking...", type="tool") as step:
         step.input = user_input
-        response = planner.chat(user_input)
+        # Run agent in thread to avoid blocking the event loop
+        import asyncio
+        response = await asyncio.get_event_loop().run_in_executor(
+            None, planner.chat, user_input
+        )
         step.output = _context_bar(planner.memory.context)
 
-    # Format and send response
+    # Stream the formatted response token by token
     response_type = _detect_type(user_input)
-    formatted = _add_header(response, response_type)
-    await cl.Message(content=formatted).send()
+    header = {
+        "weather":   "## 🌤 Weather Report\n\n",
+        "hotel":     "## 🏨 Accommodation Options\n\n",
+        "budget":    "## 💰 Budget Breakdown\n\n",
+        "itinerary": "## 🗺️ Your Travel Plan\n\n",
+        "general":   "",
+    }.get(response_type, "")
+    footer = "\n\n---\n💡 *Ask me anything about your trip!*"
+    full_response = header + response + footer
+
+    msg = cl.Message(content="")
+    await msg.send()
+    # Stream word by word for a smooth UX
+    words = full_response.split(" ")
+    for i, word in enumerate(words):
+        await msg.stream_token(word + (" " if i < len(words) - 1 else ""))
+    await msg.update()
 
 
 @cl.on_chat_end
