@@ -163,12 +163,12 @@ def get_weather(city: str) -> str:
             )
 
         return (
-            f"🌤 **Weather in {city.title()}**\n\n"
+            f"🌤 **Current Weather in {city.title()}**\n\n"
             f"🌡 Temperature: {temp}°C (Feels like {feels_like}°C)\n"
-            f"🌥 Condition: {condition}\n"
             f"💧 Humidity: {humidity}%\n"
+            f"🌥 Condition: {condition}\n"
             f"💨 Wind Speed: {wind} km/h\n\n"
-            f"{advice}"
+            f"🧭 Travel Advice: {advice}\n"
             f"{forecast_str}\n\n"
             f"_Source: Open-Meteo (real-time)_"
         )
