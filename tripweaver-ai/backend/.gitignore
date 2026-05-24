@@ -52,3 +52,15 @@ Thumbs.db
 # Database
 *.db
 *.sqlite3
+database/tripweaver.db
+
+# RAG / vector store artifacts
+*.faiss
+*.pkl
+faiss_index/
+
+# Streamlit secrets (keep example, ignore real secrets)
+.streamlit/secrets.toml
+
+# Uploaded documents (temp files)
+uploads/
