@@ -1,6 +1,31 @@
-langchain
-langchain-groq
-chainlit
-python-dotenv
-pydantic
-requests
+# Core LLM & agent
+langchain==0.3.25
+langchain-groq==0.3.2
+langchain-community==0.3.24
+langchain-core==0.3.58
+langchain-text-splitters==0.3.8
+
+# UI
+chainlit==2.9.6
+streamlit==1.45.1
+
+# RAG — pure-Python TF-IDF retrieval (no PyTorch/TF required)
+# sentence-transformers removed: incompatible with Python 3.13 + TF 2.20 RC
+# faiss-cpu kept for future upgrade when embedding stack stabilises
+faiss-cpu==1.10.0
+pypdf==5.4.0
+
+# Web search (free, no API key)
+duckduckgo-search==6.3.7
+
+# API & server
+fastapi==0.115.12
+uvicorn==0.34.2
+pydantic==2.11.4
+requests==2.32.3
+
+# Utilities
+python-dotenv==1.1.0
+
+# Database
+# (SQLite is built into Python — no extra package needed)

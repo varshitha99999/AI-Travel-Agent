@@ -91,7 +91,10 @@ def get_weather(city: str) -> str:
     if weather_provider == "weatherstack" or weatherstack_key:
         try:
             url = "http://api.weatherstack.com/current"
-            params = {"access_key": weatherstack_key, "query": city}
+            # Append ", India" to avoid Weatherstack mismatching Indian cities
+            # e.g. "Goa" → "Genoa, Italy" without this fix
+            query = f"{city}, India" if "india" not in city.lower() else city
+            params = {"access_key": weatherstack_key, "query": query}
             r = requests.get(url, params=params, timeout=15)
             r.raise_for_status()
             data = r.json()

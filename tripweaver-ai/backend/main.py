@@ -1,8 +1,11 @@
+from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 
 from agent.planner import PlannerError, TripPlanner
 from models.request_model import TripPlan, TripRequest
+
+load_dotenv()
 
 
 app = FastAPI(title="TripWeaver AI", version="1.0.0")
