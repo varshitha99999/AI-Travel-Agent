@@ -111,7 +111,7 @@ def _fetch_opentripmap(lat: float, lon: float, api_key: str, radius: int = 10000
         "limit": 15,
         "apikey": api_key,
     }
-    r = requests.get(url, params=params, timeout=15)
+    r = requests.get(url, params=params, timeout=8)
     r.raise_for_status()
     data = r.json()
 
