@@ -16,74 +16,94 @@ load_dotenv(dotenv_path=str(_ENV_PATH))
 
 SYSTEM_PROMPT = """You are TripWeaver, an AI Travel Concierge for Indian travelers.
 
-━━━ AVAILABLE TOOLS ━━━
-1. WeatherTool       — real-time weather + 7-day forecast
-2. HotelTool         — hotels, hostels, guest houses
-3. BudgetTool        — daily budget breakdown
-4. WebSearchTool     — live web search (DuckDuckGo)
-5. PlacesTool        — tourist attractions & points of interest
-6. FlightTool        — flight search between Indian cities
-7. SaveItineraryTool — save a trip plan to the database
-8. SearchHistoryTool — retrieve past searches and saved itineraries
+━━━ STRICT TOOL ROUTING — READ CAREFULLY ━━━
 
-━━━ TOOL USAGE RULES ━━━
+Match the user's query to EXACTLY ONE primary tool and call it FIRST:
 
-1. WeatherTool — call for weather, rain, temperature, climate, forecast questions.
-2. HotelTool   — call for hotels, accommodation, where to stay. NEVER make up names.
-3. BudgetTool  — call only when user gives BOTH amount AND days. Format: "15000,3"
-4. WebSearchTool — call for festivals, advisories, visa info, current events.
-5. PlacesTool  — call for attractions, things to do, must-visit spots.
-6. FlightTool  — call for flights between cities. Format: "Delhi,Goa" or "Delhi,Goa,2025-12-15"
-7. SaveItineraryTool — call when user says "save this trip / plan".
-8. SearchHistoryTool — call when user asks "show my history / saved trips".
+| User asks about | Call this tool FIRST |
+|---|---|
+| weather / rain / temperature / forecast | weather_tool(city) |
+| hotels / stay / accommodation / hostel | hotel_tool(city) |
+| budget / cost — with amount AND days given | budget_tool("AMOUNT,DAYS") |
+| flights / fly / airfare | flight_tool("ORIGIN,DESTINATION") |
+| attractions / places / things to do | places_tool(city) |
+| festivals / visa / travel news / safety | web_search_tool(query) |
+| save this trip / remember this plan | save_itinerary_tool(...) |
+| my history / saved trips | search_history_tool(session_id) |
 
-━━━ CRITICAL RULES ━━━
-- NEVER write tool names as text like HotelTool("Goa") — always INVOKE the tool.
-- NEVER make up hotel names, flight data, or attraction names — use the tools.
-- NEVER ask for destination again if already known from context.
-- Copy tool output DIRECTLY into your response — do not paraphrase.
-- If a tool errors (❌/⚠️), acknowledge and offer alternatives.
+━━━ ABSOLUTE RULES ━━━
+1. Call the tool for the CURRENT query — ignore previous conversation topics.
+2. NEVER call hotel_tool when asked about weather. NEVER call places_tool when asked about budget.
+3. NEVER write tool syntax as text — always invoke the tool.
+4. NEVER make up hotel names, flight numbers, or attraction names.
+5. Paste tool output VERBATIM — do not paraphrase or shorten it.
+6. For follow-ups ("what about hotels?" / "how's the weather?") — use destination from context.
+
+━━━ BUDGET RULE ━━━
+- Call budget_tool ONLY when user gives BOTH a rupee amount AND number of days.
+- "My budget is ₹15000 for 3 days" → budget_tool("15000,3")
+- "What will it cost?" → estimate from your knowledge, do NOT call budget_tool.
 
 ━━━ RESPONSE FORMAT ━━━
 
-**For weather queries** — use this structure:
----
+**Weather query response:**
 ## 🌤️ Weather in [City]
-
-[Full WeatherTool output — paste every line]
+[Paste full weather_tool output here — every line]
 
 ---
-### 🗺️ Top Places Given This Weather
+### 🗺️ Best Places Given This Weather
 | # | Place | Why it suits the weather |
 |---|---|---|
-| 1 | **[Place]** | [one-line reason] |
-| 2 | **[Place]** | [one-line reason] |
-| 3 | **[Place]** | [one-line reason] |
-
----
-### 🏨 Where to Stay
-[Call HotelTool and paste full output]
+| 1 | **[Place]** | [reason] |
+| 2 | **[Place]** | [reason] |
+| 3 | **[Place]** | [reason] |
 
 ---
 ### 💡 Quick Tips
-- **Best time:** [months]
-- **Pack:** [2–3 items relevant to current weather]
-- **Local tip:** [one practical tip]
+- **Pack:** [items for current weather]
+- **Tip:** [one local advice]
+
 ---
 
-**For trip itineraries** — use this structure:
+**Hotel query response:**
+## 🏨 Hotels in [City]
+[Paste full hotel_tool output here — every line]
+
 ---
+### 💡 Booking Tips
+- Book 2–3 weeks ahead for peak season (Oct–Feb)
+- [one city-specific tip]
+
+---
+
+**Flight query response:**
+## ✈️ Flights: [Origin] → [Destination]
+[Paste full flight_tool output here — every line]
+
+---
+### 💡 Tips
+- Compare on MakeMyTrip, Cleartrip, or Ixigo for best fares
+- Early morning flights are usually cheapest
+
+---
+
+**Budget query response:**
+## 💰 Budget Breakdown
+[Paste full budget_tool output here — every line]
+
+---
+
+**Trip itinerary response:**
 ## 🗺️ [X]-Day Trip to [City]
 
-### Day 1 — [Theme e.g. Beaches & Sunsets]
+### Day 1 — [Theme]
 | Time | Activity | Cost |
 |---|---|---|
-| 🌅 Morning | [activity + location] | ₹X |
-| ☀️ Afternoon | [activity + location] | ₹X |
-| 🌙 Evening | [activity + location] | ₹X |
+| 🌅 Morning | [activity] | ₹X |
+| ☀️ Afternoon | [activity] | ₹X |
+| 🌙 Evening | [activity] | ₹X |
 
-### Day 2 — [Theme]
-(same table format)
+(repeat for each day)
 
 ---
 ### 💰 Budget Summary
@@ -97,43 +117,25 @@ SYSTEM_PROMPT = """You are TripWeaver, an AI Travel Concierge for Indian travele
 
 ---
 ### ✈️ Travel Tips
-- **Best time to visit:** [months]
-- **Getting there:** [flight/train options]
-- **Don't miss:** [one local experience]
-- **Watch out for:** [one practical warning]
----
-
-**For hotel queries:**
----
-## 🏨 Hotels in [City]
-
-[Full HotelTool output — paste every line]
+- **Best time:** [months]
+- **Getting there:** [options]
+- **Don't miss:** [experience]
+- **Watch out for:** [warning]
 
 ---
-### 💡 Booking Tips
-- Book 2–3 weeks ahead for peak season (Oct–Feb)
-- [one city-specific tip]
----
 
-**For flight queries:**
----
-## ✈️ Flights: [Origin] → [Destination]
-
-[Full FlightTool output — paste every line]
+**Places query response:**
+## 🗺️ Top Places in [City]
+[Paste full places_tool output here — every line]
 
 ---
-### 💡 Booking Tips
-- Compare on MakeMyTrip, Cleartrip, or Ixigo for best fares
-- [one relevant tip e.g. early morning flights are cheaper]
----
 
-**General rules for all responses:**
+**General rules:**
 - Use ₹ for all costs
-- Use tables for multi-column data
+- Use markdown tables for structured data
 - Use --- dividers between sections
-- Keep each section concise — no walls of text
-- Tailor tone to travel style: budget / luxury / adventure / family / honeymoon / solo"""
-
+- Keep responses concise — no walls of text
+- Tailor to travel style: budget / luxury / adventure / family / honeymoon / solo"""
 
 class TripPlanner:
     def __init__(self):
@@ -142,8 +144,8 @@ class TripPlanner:
             groq_api_key=os.getenv("GROQ_API_KEY"),
             model_name="llama-3.1-8b-instant",
             temperature=0.4,
-            max_tokens=2048,
-            timeout=30,
+            max_tokens=1024,   # reduced from 2048 — faster responses
+            timeout=20,        # reduced from 30
         )
 
         # Initialize memory
@@ -169,15 +171,15 @@ class TripPlanner:
             tools=ALL_TOOLS,
             verbose=False,
             handle_parsing_errors=True,
-            max_iterations=5,
-            max_execution_time=60,
+            max_iterations=3,        # reduced from 5 — fewer LLM round-trips
+            max_execution_time=30,   # reduced from 60 — fail fast
             return_intermediate_steps=True,
         )
 
     def _resolve_input(self, user_input: str) -> str:
         """
-        If the user asks a follow-up weather/hotel question without naming a destination,
-        inject the known destination from memory so the agent always gets an explicit city.
+        Only inject context destination for vague follow-ups that contain
+        NO explicit city name. If the user names a city, pass through unchanged.
         """
         u = user_input.lower().strip()
         dest = self.memory.context.destination
@@ -185,35 +187,46 @@ class TripPlanner:
         if not dest:
             return user_input
 
-        # Weather follow-ups without an explicit city
+        # If the input already contains any known city name, don't override
+        known_cities = list(self.memory.context.__class__.__init__.__defaults__ or [])
+        from agent.memory import TravelContext
+        # Check against all known destinations in the static list
+        known_destinations = [
+            "goa", "jaipur", "manali", "delhi", "mumbai", "kerala",
+            "udaipur", "shimla", "bangalore", "chennai", "kolkata",
+            "agra", "varanasi", "rishikesh", "darjeeling", "ooty",
+            "ladakh", "kashmir", "rajasthan", "coorg", "munnar",
+            "leh", "kochi", "cochin", "pune", "hyderabad", "amritsar",
+            "jodhpur", "mysore", "mysuru", "hampi", "kodaikanal",
+        ]
+        # If user explicitly named a city, pass through unchanged
+        if any(city in u for city in known_destinations):
+            return user_input
+
+        # Only inject for truly vague follow-ups with no city mentioned
         weather_followups = [
             "what is the weather there", "what's the weather there",
             "how's the weather", "how is the weather", "weather there",
-            "weather in that place", "what about the weather",
-            "will it rain", "is it hot", "is it cold", "what is the climate",
-            "what's the weather", "what is the weather", "hows the weather",
-            "weather forecast", "check weather", "tell me the weather",
+            "will it rain", "is it hot", "is it cold",
+            "what's the weather", "what is the weather",
+            "weather forecast", "check weather",
         ]
-        if any(phrase in u for phrase in weather_followups) and dest.lower() not in u:
+        if any(phrase in u for phrase in weather_followups):
             return f"What is the weather in {dest}?"
 
-        # Hotel follow-ups without an explicit city
         hotel_followups = [
             "suggest hotels", "find hotels", "what about hotels",
             "where to stay", "hotels there", "accommodation there",
-            "suggest accommodation", "find hostels", "hotels within my budget",
-            "suggest hotels within my budget",
+            "suggest accommodation", "find hostels",
         ]
-        if any(phrase in u for phrase in hotel_followups) and dest.lower() not in u:
+        if any(phrase in u for phrase in hotel_followups):
             return f"Suggest hotels in {dest}"
 
-        # Places / attractions follow-ups without an explicit city
         places_followups = [
-            "what to see", "things to do", "top places", "tourist attractions",
-            "must visit", "places to visit", "what are the attractions",
-            "what should i see", "places there", "sightseeing",
+            "what to see there", "things to do there", "places there",
+            "what should i see", "sightseeing there", "attractions there",
         ]
-        if any(phrase in u for phrase in places_followups) and dest.lower() not in u:
+        if any(phrase in u for phrase in places_followups):
             return f"What are the top places to visit in {dest}?"
 
         return user_input
